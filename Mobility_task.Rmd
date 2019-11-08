@@ -1,0 +1,145 @@
+---
+title: "Mobilty Task PArt 1"
+output: html_notebook
+---
+
+```{r}
+p <- c("data.table", "lubridate", "leaflet", "ggplot2","tidyr","kableExtra", "jmotif", "bit64")
+
+ip <- installed.packages()[, 1]
+for( pp in p){
+  if(!pp %in% ip) install.packages(pp)
+}
+
+library(data.table) # for fast csv reading
+library(lubridate) # for time stamp handling
+library(leaflet) # for map plotting
+library(ggplot2) # for nice plots
+library(tidyr) # for data manipulations
+library(kableExtra) # for nice HTML tables
+library(jmotif) # for PAA
+```
+
+
+```{r}
+# The directory where your data chunk is saved. Adjust this variable.
+path_data <- "/Users/natalia.tretiakova/Documents/Informatik/WS19_20/DM/Data_NT"
+
+# The directory name for one trip:
+dir_names = c("28_13_2019-10-29T154654.097", "28_28_2019-10-30T081252.009", "28_43_2019-10-31T063500.256")
+
+```
+
+
+```{r}
+for (name in dir_names) {
+  trip_dir <- name
+  # the markers file doesnt't fulfill standard csv file conventions, so you need "fill = TRUE"
+
+  markers <- fread(file.path(path_data, trip_dir, "markers.csv"), sep = ";", fill = TRUE)
+
+  # 
+  # kable(cbind(mtcars, mtcars)) %>%
+  #   add_header_above(c("a" = 5, "b" = 18)) %>%
+  #   kable_styling() %>%
+  #   scroll_box(width = "100%", height = "200px")
+  
+  print(kable(markers) %>%
+    kable_styling(font_size = 9) %>%
+    scroll_box(width = "100%", height = "200px"))
+  
+  t01 <- markers[markers$V3 %in% c("START", "STOP"), V1] %>% ymd_hms() %>% with_tz()
+  print(difftime(t01[2] , t01[1]))
+}
+```
+```{r}
+acc <- fread(file.path(path_data, trip_dir, "acceleration.csv"))
+acc$time <- with_tz(ymd_hms(acc$time))
+head(acc)
+
+```
+
+
+```{r}
+dim(acc)
+```
+```{r}
+# acceleration is sampled with a sampling rate of ~100 Hz. 
+# get the time stamp as numeric including the milliseconds:
+acc$time_ms <- as.numeric(seconds(acc$time) * 1000)
+print(head(acc))
+
+# interpolate the data to be equidistant at the rate of 10 Hz
+t0 <- head(acc$time_ms, 1)
+t1 <- tail(acc$time_ms, 1)
+print(t1-t0)
+```
+```{r}
+t_equi <- seq(t0, t1, by = 10) # 100 Hz
+# PAA_NUM <- length(t_equi)/20 # aggregate 20 values to 1 => 5Hz
+PAA_NUM <- length(t_equi)/10 # aggregate 10 values to 1 => 10Hz
+
+# define help function for equidistant sampling and piecewise aggregate approximation
+foo <- function(x){
+  approx(x = acc$time_ms, y = x, xout = t_equi)$y %>% 
+    paa(., paa_num = PAA_NUM)
+}
+
+acc_equi <- data.frame(time_ms = paa(t_equi, PAA_NUM),
+                       x = foo(acc$x),
+                       y = foo(acc$y),
+                       z = foo(acc$z))
+
+head(acc_equi)
+```
+```{r}
+dim(acc_equi)
+head(acc_equi)
+```
+
+
+```{r}
+dfp <- gather(data = acc_equi, "key", "value", -time_ms)
+dfp$time <-  as.POSIXct(acc_equi$time_ms/1000, origin = "1970-01-01", tz = "UTC")
+
+# some bug with time, one etry was from 2014
+min_time <- min(dfp$time)
+dfp <- subset(dfp, time != min_time)
+
+dim(dfp)
+
+```
+
+```{r}
+head(dfp)
+tail(dfp)
+```
+```{r}
+ggplot(dfp) + geom_line(aes(x = time, y = value, group = key, col = key))
+```
+```{r}
+min_time <- min(dfp$time)
+dfp <- subset(dfp, time != min_time)
+tail(dfp)
+```
+
+```{r}
+n2 <- data.frame(time = as.POSIXct(acc_equi$time_ms/1000, origin = "1970-01-01", tz = "UTC"),
+                value = apply(acc_equi, 1, function(a){sqrt(sum(a[2:4]^2))}))
+n2 <- subset(n2, time!=min_time) #time bug
+dim(n2)
+```
+```{r}
+tail(n2)
+```
+
+```{r}
+gg1 <- ggplot(n2) + geom_line(aes(x = time, y = value))
+changes <- markers[V2 == "CGT_MODE_CHANGED", list(time = with_tz(ymd_hms(V3)), mode = V4)]
+gg1 + geom_vline(data = changes, aes(xintercept = time), col = "red")+
+  geom_text(data = changes, aes(x = time + 20, y = 20, label = mode, angle = 90), col = "red")
+```
+```{r}
+print("test")
+```
+
